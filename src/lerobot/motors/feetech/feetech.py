@@ -156,6 +156,37 @@ class FeetechMotorsBus(SerialMotorsBus):
         self._assert_motors_exist()
         self._assert_same_firmware()
 
+    def ping(self, motor: NameOrID, num_retry: int = 0, raise_on_error: bool = False) -> int | None:
+        """Ping a single motor; tolerate SDK bug when the model field is truncated (e.g. baud mismatch)."""
+        import scservo_sdk as scs
+
+        id_ = self._get_motor_id(motor)
+        for n_try in range(1 + num_retry):
+            try:
+                model_number, comm, error = self.packet_handler.ping(self.port_handler, id_)
+            except IndexError:
+                logger.debug(
+                    "ping failed for id=%s (truncated model response; check baud rate, power, and cabling).",
+                    id_,
+                )
+                model_number, comm, error = 0, scs.COMM_RX_CORRUPT, 0
+            if self._is_comm_success(comm):
+                break
+            logger.debug(f"ping failed for {id_=}: {n_try=} got {comm=} {error=}")
+
+        if not self._is_comm_success(comm):
+            if raise_on_error:
+                raise ConnectionError(self.packet_handler.getTxRxResult(comm))
+            else:
+                return None
+        if self._is_error(error):
+            if raise_on_error:
+                raise RuntimeError(self.packet_handler.getRxPacketError(error))
+            else:
+                return None
+
+        return model_number
+
     def _find_single_motor(self, motor: str, initial_baudrate: int | None = None) -> tuple[int, int]:
         if self.protocol_version == 0:
             return self._find_single_motor_p0(motor, initial_baudrate)
